@@ -22,11 +22,16 @@ from prepare_vocab import VocabHelp
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler(sys.stdout))
-from transformers import RobertaTokenizer
+from transformers import RobertaForMaskedLM, RobertaTokenizer
 
-# Tải từ mạng về và lưu lại thành thư mục cục bộ tên là 'roberta'
-tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
-tokenizer.save_pretrained('./roberta')
+# 1. Tải cả tokenizer và mô hình (weights) chuẩn từ Hugging Face
+model_name = "roberta-base"
+tokenizer = RobertaTokenizer.from_pretrained(model_name)
+model = RobertaForMaskedLM.from_pretrained(model_name)
+
+# 2. Lưu tất cả (bao gồm cả file pytorch_model.bin/model.safetensors) vào thư mục ./roberta
+tokenizer.save_pretrained("./roberta")
+model.save_pretrained("./roberta")
 
 def setup_seed(seed):
     torch.manual_seed(seed)
