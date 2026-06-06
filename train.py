@@ -22,8 +22,7 @@ from prepare_vocab import VocabHelp
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler(sys.stdout))
-from transformers import RobertaForMaskedLM, RobertaTokenizer, BertTokenizer
-
+from transformers import RobertaForMaskedLM, RobertaTokenizer, BertModel, BertTokenizer
 # 1. Tải cả tokenizer và mô hình (weights) chuẩn từ Hugging Face
 model_name = "roberta-base"
 tokenizer = RobertaTokenizer.from_pretrained(model_name)
@@ -35,12 +34,12 @@ model.save_pretrained("./roberta")
 
 # 1. Tải cả tokenizer và mô hình (weights) chuẩn từ Hugging Face
 model_name = "bert-base-uncased"
-tokenizer = RobertaTokenizer.from_pretrained(model_name)
-model = RobertaForMaskedLM.from_pretrained(model_name)
+tokenizer = BertTokenizer.from_pretrained(model_name)
+model = BertModel.from_pretrained(model_name)
 
 # 2. Lưu tất cả (bao gồm cả file pytorch_model.bin/model.safetensors) vào thư mục ./roberta
-tokenizer.save_pretrained("./roberta")
-model.save_pretrained("./roberta")
+tokenizer.save_pretrained("./bert")
+model.save_pretrained("./bert"/content
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -287,16 +286,16 @@ def main():
     }
     lexicon_files = {
         'restaurant': {
-            'train': './dataset/Restaurants_corenlp/train.raw',
-            'test': './dataset/Restaurants_corenlp/test.raw',
+            'train': '/content/dataset/Restaurants_corenlp/train.raw',
+            'test': '/content/dataset/Restaurants_corenlp/test.raw',
         },
         'laptop': {
-            'train': './dataset/Laptops_corenlp/train.raw',
-            'test': './dataset/Laptops_corenlp/test.raw'
+            'train': '/content/dataset/Laptops_corenlp/train.raw',
+            'test': '/content/dataset/Laptops_corenlp/test.raw'
         },
         'twitter': {
-            'train': './dataset/Tweets_corenlp/train.raw',
-            'test': './dataset/Tweets_corenlp/test.raw',
+            'train': '/content/dataset/Tweets_corenlp/train.raw',
+            'test': '/content/dataset/Tweets_corenlp/test.raw',
         }
     }
 
