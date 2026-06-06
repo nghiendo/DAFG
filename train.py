@@ -22,10 +22,19 @@ from prepare_vocab import VocabHelp
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler(sys.stdout))
-from transformers import RobertaForMaskedLM, RobertaTokenizer
+from transformers import RobertaForMaskedLM, RobertaTokenizer, BertTokenizer
 
 # 1. Tải cả tokenizer và mô hình (weights) chuẩn từ Hugging Face
 model_name = "roberta-base"
+tokenizer = RobertaTokenizer.from_pretrained(model_name)
+model = RobertaForMaskedLM.from_pretrained(model_name)
+
+# 2. Lưu tất cả (bao gồm cả file pytorch_model.bin/model.safetensors) vào thư mục ./roberta
+tokenizer.save_pretrained("./roberta")
+model.save_pretrained("./roberta")
+
+# 1. Tải cả tokenizer và mô hình (weights) chuẩn từ Hugging Face
+model_name = "bert-base-uncased"
 tokenizer = RobertaTokenizer.from_pretrained(model_name)
 model = RobertaForMaskedLM.from_pretrained(model_name)
 
@@ -264,16 +273,16 @@ def main():
 
     dataset_files = {
         'restaurant': {
-            'train': './dataset/Restaurants_corenlp/train_write.json',
-            'test': './dataset/Restaurants_corenlp/test_write.json',
+            'train': '/content/dataset/Restaurants_corenlp/train_write.json',
+            'test': '/content/dataset/Restaurants_corenlp/test_write.json',
         },
         'laptop': {
-            'train': './dataset/Laptops_corenlp/train_write.json',
-            'test': './dataset/Laptops_corenlp/test_write.json'
+            'train': '/content/dataset/Laptops_corenlp/train_write.json',
+            'test': '/content/dataset/Laptops_corenlp/test_write.json'
         },
         'twitter': {
-            'train': './dataset/Tweets_corenlp/train_write.json',
-            'test': './dataset/Tweets_corenlp/test_write.json',
+            'train': '/content/dataset/Tweets_corenlp/train_write.json',
+            'test': '/content/dataset/Tweets_corenlp/test_write.json',
         }
     }
     lexicon_files = {
@@ -349,7 +358,7 @@ def main():
     parser.add_argument('--device', default='cuda', type=str, help='cpu, cuda')
     parser.add_argument('--seed', default=1000, type=int)
     parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight deay if we apply some.")
-    parser.add_argument('--vocab_dir', type=str, default='./dataset/Laptops_corenlp')
+    parser.add_argument('--vocab_dir', type=str, default='../dataset/Laptops_corenlp')
     parser.add_argument('--pad_id', default=0, type=int)
     parser.add_argument('--parseadj', default=False, action='store_true', help='dependency probability')
     parser.add_argument('--parsehead', default=False, action='store_true', help='dependency tree')
