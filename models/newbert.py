@@ -95,6 +95,7 @@ class GCNBert(nn.Module):
         self.layernorm = LayerNorm(opt.bert_dim)
 
         self.attdim = 100
+        torch.serialization.add_safe_globals([torch.nn.modules.sparse.Embedding])
         self.edge_emb = torch.load(opt.amr_edge_pt) \
             if opt.edge == "normal" or opt.edge == "same" else nn.Embedding(56000, 1024)
         self.edge_emb_layernorm = nn.LayerNorm(opt.amr_edge_dim)
