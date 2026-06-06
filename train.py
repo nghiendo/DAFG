@@ -10,8 +10,10 @@ import numpy as np
 from sklearn import metrics
 from time import strftime, localtime
 from torch.utils.data import DataLoader
-from transformers import BertModel, AdamW, RobertaForMaskedLM
+from transformers import BertModel, RobertaForMaskedLM
 
+# Import AdamW từ PyTorch để tránh lỗi phiên bản
+from torch.optim import AdamW
 from models.newbert import GCNBertClassifier
 
 from data_utils import SentenceDataset, build_tokenizer, build_embedding_matrix, Tokenizer4BertGCN, ABSAGCNData
@@ -20,7 +22,11 @@ from prepare_vocab import VocabHelp
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler(sys.stdout))
+from transformers import RobertaTokenizer
 
+# Tải từ mạng về và lưu lại thành thư mục cục bộ tên là 'roberta'
+tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
+tokenizer.save_pretrained('./roberta')
 
 def setup_seed(seed):
     torch.manual_seed(seed)
