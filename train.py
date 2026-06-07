@@ -380,8 +380,8 @@ def main():
     parser.add_argument('--edge', default='normal', type=str, help="['normal', 'random', 'same']")
 
     opt = parser.parse_args()
-    opt.amr_edge_stoi = '/content/DAFG/models/stoi.pt'
-    opt.amr_edge_pt = '/content/DAFG/models/embedding.pt'
+    opt.amr_edge_stoi = '/kaggle/working/DAFG/models/stoi.pt'
+    opt.amr_edge_pt = '/kaggle/working/DAFG/models/embedding.pt'
     opt.amr_edge_dim = 1024
     opt.edge_dropout = opt.bert_dropout
     opt.final_dropout = opt.bert_dropout
