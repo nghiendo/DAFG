@@ -272,30 +272,30 @@ def main():
 
     dataset_files = {
         'restaurant': {
-            'train': '/content/dataset/Restaurants_corenlp/train_write.json',
-            'test': '/content/dataset/Restaurants_corenlp/test_write.json',
+            'train': '/kaggle/working/dataset/Restaurants_corenlp/train_write.json',
+            'test': '/kaggle/working/dataset/Restaurants_corenlp/test_write.json',
         },
         'laptop': {
-            'train': '/content/dataset/Laptops_corenlp/train_write.json',
-            'test': '/content/dataset/Laptops_corenlp/test_write.json'
+            'train': '/kaggle/working/dataset/Laptops_corenlp/train_write.json',
+            'test': '/kaggle/working/dataset/Laptops_corenlp/test_write.json'
         },
         'twitter': {
-            'train': '/content/dataset/Tweets_corenlp/train_write.json',
-            'test': '/content/dataset/Tweets_corenlp/test_write.json',
+            'train': '/kaggle/working/dataset/Tweets_corenlp/train_write.json',
+            'test': '/kaggle/working/dataset/Tweets_corenlp/test_write.json',
         }
     }
     lexicon_files = {
         'restaurant': {
-            'train': '/content/dataset/Restaurants_corenlp/train.raw',
-            'test': '/content/dataset/Restaurants_corenlp/test.raw',
+            'train': '/kaggle/working/dataset/Restaurants_corenlp/train.raw',
+            'test': '/kaggle/working/dataset/Restaurants_corenlp/test.raw',
         },
         'laptop': {
-            'train': '/content/dataset/Laptops_corenlp/train.raw',
-            'test': '/content/dataset/Laptops_corenlp/test.raw'
+            'train': '/kaggle/working/dataset/Laptops_corenlp/train.raw',
+            'test': '/kaggle/working/dataset/Laptops_corenlp/test.raw'
         },
         'twitter': {
-            'train': '/content/dataset/Tweets_corenlp/train.raw',
-            'test': '/content/dataset/Tweets_corenlp/test.raw',
+            'train': '/kaggle/working/dataset/Tweets_corenlp/train.raw',
+            'test': '/kaggle/working/dataset/Tweets_corenlp/test.raw',
         }
     }
 
