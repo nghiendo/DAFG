@@ -286,16 +286,16 @@ def main():
     }
     lexicon_files = {
         'restaurant': {
-            'train': '/kaggle/working/dataset/Restaurants_corenlp/train.raw',
-            'test': '/kaggle/working/dataset/Restaurants_corenlp/test.raw',
+            'train': '/kaggle/working/DAFG/dataset/Restaurants_corenlp/train.raw',
+            'test': '/kaggle/working/DAFG/dataset/Restaurants_corenlp/test.raw',
         },
         'laptop': {
-            'train': '/kaggle/working/dataset/Laptops_corenlp/train.raw',
-            'test': '/kaggle/working/dataset/Laptops_corenlp/test.raw'
+            'train': '/kaggle/working/DAFG/dataset/Laptops_corenlp/train.raw',
+            'test': '/kaggle/working/DAFG/dataset/Laptops_corenlp/test.raw'
         },
         'twitter': {
-            'train': '/kaggle/working/dataset/Tweets_corenlp/train.raw',
-            'test': '/kaggle/working/dataset/Tweets_corenlp/test.raw',
+            'train': '/kaggle/working/DAFG/dataset/Tweets_corenlp/train.raw',
+            'test': '/kaggle/working/DAFG/dataset/Tweets_corenlp/test.raw',
         }
     }
 
