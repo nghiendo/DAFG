@@ -272,16 +272,16 @@ def main():
 
     dataset_files = {
         'restaurant': {
-            'train': '/kaggle/working/dataset/Restaurants_corenlp/train_write.json',
-            'test': '/kaggle/working/dataset/Restaurants_corenlp/test_write.json',
+            'train': '/kaggle/working/DAFG/dataset/Restaurants_corenlp/train_write.json',
+            'test': '/kaggle/working/DAFG/dataset/Restaurants_corenlp/test_write.json',
         },
         'laptop': {
-            'train': '/kaggle/working/dataset/Laptops_corenlp/train_write.json',
-            'test': '/kaggle/working/dataset/Laptops_corenlp/test_write.json'
+            'train': '/kaggle/working/DAFG/dataset/Laptops_corenlp/train_write.json',
+            'test': '/kaggle/working/DAFG/dataset/Laptops_corenlp/test_write.json'
         },
         'twitter': {
-            'train': '/kaggle/working/dataset/Tweets_corenlp/train_write.json',
-            'test': '/kaggle/working/dataset/Tweets_corenlp/test_write.json',
+            'train': '/kaggle/working/DAFG/dataset/Tweets_corenlp/train_write.json',
+            'test': '/kaggle/working/DAFG/dataset/Tweets_corenlp/test_write.json',
         }
     }
     lexicon_files = {
