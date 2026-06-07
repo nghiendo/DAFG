@@ -39,7 +39,7 @@ model = BertModel.from_pretrained(model_name)
 
 # 2. Lưu tất cả (bao gồm cả file pytorch_model.bin/model.safetensors) vào thư mục ./roberta
 tokenizer.save_pretrained("./bert")
-model.save_pretrained("./bert"/content
+model.save_pretrained("./bert")
 
 def setup_seed(seed):
     torch.manual_seed(seed)
