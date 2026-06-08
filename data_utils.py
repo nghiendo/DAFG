@@ -395,9 +395,6 @@ class ABSAGCNData(Dataset):
         prompt_right = ' ? It was <mask>'
         parse = ParseData
         polarity_dict = {'positive': 0, 'negative': 1, 'neutral': 2}
-        fin = open(file, 'r', encoding='utf-8', newline='\n', errors='ignore')
-        lines = fin.readlines()
-        fin.close()
         file_base, _ = os.path.splitext(file)
         file = file_base + '_write.json'
         fin = open(file + '_relation.pkl', 'rb')
@@ -409,40 +406,31 @@ class ABSAGCNData(Dataset):
         fin = open(file + '_distance.pkl', 'rb')
         dis_matrix = pickle.load(fin)
         fin.close()
-        # for i in range(0, len(lines), 3):
-        #     text = lines[i].lower().strip()
-        #     text_len = len(tokenizer.tokenize(text))
-        #     distance_adj = np.zeros((tokenizer.max_seq_len, tokenizer.max_seq_len)).astype('float32')
-        #     distance_adj[0:text_len, 0:text_len] = dis_matrix[i][:text_len, :text_len]
-        #     relation_adj = np.zeros((5, tokenizer.max_seq_len, tokenizer.max_seq_len)).astype('float32')
-        #     for j in range(0, 4):
-        #         r_tmp = np.where(rel_matrix[i] == j + 1, 1, 0)
-        #         relation_adj[j, 0:text_len, 0:text_len] = r_tmp[:text_len, :text_len]
-        #     for k in range(4, 5):
-        #         l_tmp = np.where(lex_matrix[i] == k + 1, 1, 0)
-        #         relation_adj[k, 0:text_len, 0:text_len] = l_tmp[:text_len, :text_len]
-        for i in range(0, len(lines), 3):
-            text = lines[i].lower().strip()
+        parsed_data = parse(fname)
+
+        for sample_idx, obj in enumerate(tqdm(parsed_data, total=len(parsed_data), desc="Training examples")):
+            sample_key = sample_idx * 3
+            polarity = polarity_dict[obj['label']]
+            text = obj['text']
             text_len = len(tokenizer.tokenize(text))
-            distance_adj = np.zeros((tokenizer.max_seq_len, tokenizer.max_seq_len)).astype('float32')
-            relation_adj = np.zeros((5, tokenizer.max_seq_len, tokenizer.max_seq_len)).astype('float32')
-            padded_dis_matrix = np.pad(dis_matrix[i], ((0, max(0, text_len - dis_matrix[i].shape[0])),
-                                                       (0, max(0, text_len - dis_matrix[i].shape[1]))), 'constant')
+            distance_adj = np.zeros((tokenizer.max_seq_len, tokenizer.max_seq_len), dtype='float32')
+            relation_adj = np.zeros((5, tokenizer.max_seq_len, tokenizer.max_seq_len), dtype='float32')
+
+            padded_dis_matrix = np.pad(dis_matrix[sample_key], ((0, max(0, text_len - dis_matrix[sample_key].shape[0])),
+                                                                (0, max(0, text_len - dis_matrix[sample_key].shape[1]))), 'constant')
             distance_adj[0:text_len, 0:text_len] = padded_dis_matrix[:text_len, :text_len]
+
             for j in range(0, 4):
-                r_tmp = np.where(rel_matrix[i] == j + 1, 1, 0)
+                r_tmp = np.where(rel_matrix[sample_key] == j + 1, 1, 0)
                 padded_rel_matrix = np.pad(r_tmp, ((0, max(0, text_len - r_tmp.shape[0])),
                                                    (0, max(0, text_len - r_tmp.shape[1]))), 'constant')
                 relation_adj[j, 0:text_len, 0:text_len] = padded_rel_matrix[:text_len, :text_len]
-            for k in range(4, 5):
-                l_tmp = np.where(lex_matrix[i] == k + 1, 1, 0)
-                padded_lex_matrix = np.pad(l_tmp, ((0, max(0, text_len - l_tmp.shape[0])),
-                                                   (0, max(0, text_len - l_tmp.shape[1]))), 'constant')
-                relation_adj[k, 0:text_len, 0:text_len] = padded_lex_matrix[:text_len, :text_len]
 
-        for obj in tqdm(parse(fname), total=len(parse(fname)), desc="Training examples"):
-            polarity = polarity_dict[obj['label']]
-            text = obj['text']
+            l_tmp = np.where(lex_matrix[sample_key] == 5, 1, 0)
+            padded_lex_matrix = np.pad(l_tmp, ((0, max(0, text_len - l_tmp.shape[0])),
+                                               (0, max(0, text_len - l_tmp.shape[1]))), 'constant')
+            relation_adj[4, 0:text_len, 0:text_len] = padded_lex_matrix[:text_len, :text_len]
+
             term = obj['aspect']
             aspect_bert_indices = tokenizer.text_to_sequence("<s> " + term + " </s>")
             term_start = obj['aspect_post'][0]

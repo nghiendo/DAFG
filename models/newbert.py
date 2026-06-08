@@ -32,30 +32,9 @@ class GCNBertClassifier(nn.Module):
 
     def forward(self, inputs, y_onehot={}):
         outputs1, outputs2, outputs3, kl_loss,  pooled_output = self.gcn_model(inputs)
-    #   16,768      16,384   16,384                16,768
         final_outputs = torch.cat((outputs2, outputs3, pooled_output, outputs1), dim=-1)   # 16,2304
         logits = self.classifier(final_outputs)
-        W1 = nn.Linear(self.opt.bert_dim, self.opt.polarities_dim).to('cuda')
-        W2 = nn.Linear(self.opt.bert_dim, self.opt.polarities_dim).to('cuda')
-        syn_out = outputs1
-        sem_out = torch.cat((outputs2, outputs3), dim=-1)
-        if y_onehot and isinstance(y_onehot, torch.Tensor):
-            y_pred_syn = F.softmax(W1(syn_out), dim=-1)
-            y_pred_sem = F.softmax(W2(sem_out), dim=-1)
-            esyn = torch.norm(y_onehot - y_pred_syn, p=2, dim=1, keepdim=True)
-            esem = torch.norm(y_onehot - y_pred_sem, p=2, dim=1, keepdim=True)
-            esyn_norm = (esyn - esyn.min()) / (esyn.max() - esyn.min() + 1e-8)
-            esem_norm = (esem - esem.min()) / (esem.max() - esem.min() + 1e-8)
-            gate_input = torch.cat([esyn_norm, esem_norm, syn_out, sem_out], dim=1)
-            esyn_sum = esyn.sum()
-            esem_sum = esem.sum()
-            grad_syn = torch.autograd.grad(esyn_sum, syn_out, retain_graph=True, create_graph=True)[0]
-            grad_sem = torch.autograd.grad(esem_sum, sem_out, retain_graph=True, create_graph=True)[0]
-            Hau = grad_sem * grad_syn
-            final = self.opt.alpha * syn_out + self.opt.beta * sem_out + gate_input * Hau
-        else:
-            final = logits
-        return final, kl_loss
+        return logits, kl_loss
 
 
 class GCNAbsaModel(nn.Module):
@@ -101,6 +80,8 @@ class GCNBert(nn.Module):
         self.edge_emb_layernorm = nn.LayerNorm(opt.amr_edge_dim)
         self.edge_emb_drop = nn.Dropout(opt.edge_dropout)
         self.edge_dim_change = nn.Linear(opt.amr_edge_dim, opt.hidden_dim, bias=False)
+        self.edge_proj = nn.Linear(opt.amr_edge_dim, opt.hidden_dim)
+        self.edge_score = nn.Linear(opt.amr_edge_dim, 1)
 
         self.W = nn.ModuleList()
         for layer in range(self.layers):
@@ -173,16 +154,14 @@ class GCNBert(nn.Module):
         attention_output_c, _ = self.attention(cnn_out, aspect)   # 16,100,100
         attention_output_l, _ = self.attention(lstm_out, aspect)  # 16,100,100
         attention_cat = torch.cat((attention_output_c, attention_output_l), dim=-1)    # 16,100,200
-        attention_mean = torch.div(torch.sum(attention_cat, dim=1), text_len.unsqueeze(1).float().cuda())  # 16,200
+        attention_mean = torch.div(torch.sum(attention_cat, dim=1), text_len.unsqueeze(1).float().to(attention_cat.device))  # 16,200
         outputs_ad = self.dense(attention_mean)  # 16,768
 
 # -------------------------------------------------语义GCN--------------------------------------------------------------------------------------------
         edge_adj = self.edge_emb(edge_adj)  # 16,100,100,1024
         for layer in range(self.layers):
-            edge_1 = nn.Linear(1024, self.opt.hidden_dim).to('cuda')
-            edge_gcn1 = edge_1(edge_adj).sum(dim=2)  # 16,100,768
-            edge_2 = nn.Linear(1024, 1).to('cuda')
-            edge_gcn2 = edge_2(edge_adj).squeeze(-1)  # 16,100,100
+            edge_gcn1 = self.edge_proj(edge_adj).sum(dim=2)  # 16,100,768
+            edge_gcn2 = self.edge_score(edge_adj).squeeze(-1)  # 16,100,100
             edge_adj = self.gc1(edge_gcn1, edge_gcn2)  # 16,100,768
         sem_input = edge_adj
         gcn_inputs = self.bert_drop(sequence_output)
@@ -210,17 +189,17 @@ class GCNBert(nn.Module):
         adj_s = adj_s / self.attention_heads
         for j in range(adj_s.size(0)):
             adj_s[j] -= torch.diag(torch.diag(adj_s[j]))
-            adj_s[j] += torch.eye(adj_s[j].size(0)).cuda()  # self-loop
+            adj_s[j] += torch.eye(adj_s[j].size(0), device=adj_s.device)  # self-loop
 
         ad_mask = torch.ones_like(outputs_ad[:, :1]).unsqueeze(-1)
         ad_mask = ad_mask.expand(-1, self.attdim, self.attdim)
         adj_s = src_mask.transpose(1, 2) * adj_s * ad_mask
         syn_m = torch.exp((-1.0) * self.opt.alpha * (adj_matrix + adj.mul(adj_matrix.new_zeros(1)).sum()))
         sem_m = (aspect_score_avg > torch.ones_like(aspect_score_avg) * self.opt.beta)
-        syn_m = syn_m.masked_fill(sem_m, 1).cuda()
+        syn_m = syn_m.masked_fill(sem_m, 1)
         adj_ag = (syn_m * aspect_score_avg).type(torch.float32)
         kl_loss = F.kl_div(adj_ag.softmax(-1).log(), adj_s.softmax(-1), reduction='sum')
-        kl_loss = torch.exp((-1.0) * kl_loss * self.opt.gama)
+        kl_loss = kl_loss * self.opt.gama
         denom_s = adj_s.sum(2).unsqueeze(2) + 1
         denom_ag = adj_ag.sum(2).unsqueeze(2) + 1
         outputs_s = gcn_inputs

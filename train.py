@@ -10,9 +10,8 @@ import numpy as np
 from sklearn import metrics
 from time import strftime, localtime
 from torch.utils.data import DataLoader
-from transformers import BertModel, RobertaForMaskedLM
+from transformers import RobertaForMaskedLM
 
-# Import AdamW từ PyTorch để tránh lỗi phiên bản
 from torch.optim import AdamW
 from models.newbert import GCNBertClassifier
 
@@ -22,24 +21,6 @@ from prepare_vocab import VocabHelp
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler(sys.stdout))
-from transformers import RobertaForMaskedLM, RobertaTokenizer, BertModel, BertTokenizer
-# 1. Tải cả tokenizer và mô hình (weights) chuẩn từ Hugging Face
-model_name = "roberta-base"
-tokenizer = RobertaTokenizer.from_pretrained(model_name)
-model = RobertaForMaskedLM.from_pretrained(model_name)
-
-# 2. Lưu tất cả (bao gồm cả file pytorch_model.bin/model.safetensors) vào thư mục ./roberta
-tokenizer.save_pretrained("./roberta")
-model.save_pretrained("./roberta")
-
-# 1. Tải cả tokenizer và mô hình (weights) chuẩn từ Hugging Face
-model_name = "bert-base-uncased"
-tokenizer = BertTokenizer.from_pretrained(model_name)
-model = BertModel.from_pretrained(model_name)
-
-# 2. Lưu tất cả (bao gồm cả file pytorch_model.bin/model.safetensors) vào thư mục ./roberta
-tokenizer.save_pretrained("./bert")
-model.save_pretrained("./bert"/content
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -272,30 +253,30 @@ def main():
 
     dataset_files = {
         'restaurant': {
-            'train': '/content/dataset/Restaurants_corenlp/train_write.json',
-            'test': '/content/dataset/Restaurants_corenlp/test_write.json',
+            'train': './dataset/Restaurants_corenlp/train_write.json',
+            'test': './dataset/Restaurants_corenlp/test_write.json',
         },
         'laptop': {
-            'train': '/content/dataset/Laptops_corenlp/train_write.json',
-            'test': '/content/dataset/Laptops_corenlp/test_write.json'
+            'train': './dataset/Laptops_corenlp/train_write.json',
+            'test': './dataset/Laptops_corenlp/test_write.json'
         },
         'twitter': {
-            'train': '/content/dataset/Tweets_corenlp/train_write.json',
-            'test': '/content/dataset/Tweets_corenlp/test_write.json',
+            'train': './dataset/Tweets_corenlp/train_write.json',
+            'test': './dataset/Tweets_corenlp/test_write.json',
         }
     }
     lexicon_files = {
         'restaurant': {
-            'train': '/content/dataset/Restaurants_corenlp/train.raw',
-            'test': '/content/dataset/Restaurants_corenlp/test.raw',
+            'train': './dataset/Restaurants_corenlp/train.raw',
+            'test': './dataset/Restaurants_corenlp/test.raw',
         },
         'laptop': {
-            'train': '/content/dataset/Laptops_corenlp/train.raw',
-            'test': '/content/dataset/Laptops_corenlp/test.raw'
+            'train': './dataset/Laptops_corenlp/train.raw',
+            'test': './dataset/Laptops_corenlp/test.raw'
         },
         'twitter': {
-            'train': '/content/dataset/Tweets_corenlp/train.raw',
-            'test': '/content/dataset/Tweets_corenlp/test.raw',
+            'train': './dataset/Tweets_corenlp/train.raw',
+            'test': './dataset/Tweets_corenlp/test.raw',
         }
     }
 
@@ -357,7 +338,7 @@ def main():
     parser.add_argument('--device', default='cuda', type=str, help='cpu, cuda')
     parser.add_argument('--seed', default=1000, type=int)
     parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight deay if we apply some.")
-    parser.add_argument('--vocab_dir', type=str, default='../dataset/Laptops_corenlp')
+    parser.add_argument('--vocab_dir', type=str, default='./dataset/Laptops_corenlp')
     parser.add_argument('--pad_id', default=0, type=int)
     parser.add_argument('--parseadj', default=False, action='store_true', help='dependency probability')
     parser.add_argument('--parsehead', default=False, action='store_true', help='dependency tree')
@@ -380,8 +361,8 @@ def main():
     parser.add_argument('--edge', default='normal', type=str, help="['normal', 'random', 'same']")
 
     opt = parser.parse_args()
-    opt.amr_edge_stoi = '/content/DAFG/models/stoi.pt'
-    opt.amr_edge_pt = '/content/DAFG/models/embedding.pt'
+    opt.amr_edge_stoi = './models/stoi.pt'
+    opt.amr_edge_pt = './models/embedding.pt'
     opt.amr_edge_dim = 1024
     opt.edge_dropout = opt.bert_dropout
     opt.final_dropout = opt.bert_dropout
