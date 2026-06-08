@@ -21,24 +21,6 @@ from prepare_vocab import VocabHelp
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler(sys.stdout))
-from transformers import RobertaForMaskedLM, RobertaTokenizer, BertModel, BertTokenizer
-# 1. Tải cả tokenizer và mô hình (weights) chuẩn từ Hugging Face
-model_name = "roberta-base"
-tokenizer = RobertaTokenizer.from_pretrained(model_name)
-model = RobertaForMaskedLM.from_pretrained(model_name)
-
-# 2. Lưu tất cả (bao gồm cả file pytorch_model.bin/model.safetensors) vào thư mục ./roberta
-tokenizer.save_pretrained("./roberta")
-model.save_pretrained("./roberta")
-
-# 1. Tải cả tokenizer và mô hình (weights) chuẩn từ Hugging Face
-model_name = "bert-base-uncased"
-tokenizer = BertTokenizer.from_pretrained(model_name)
-model = BertModel.from_pretrained(model_name)
-
-# 2. Lưu tất cả (bao gồm cả file pytorch_model.bin/model.safetensors) vào thư mục ./roberta
-tokenizer.save_pretrained("./bert")
-model.save_pretrained("./bert")
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -179,8 +161,8 @@ class Instructor:
                 self.model.train()
                 optimizer.zero_grad()
                 inputs = [sample_batched[col].to(self.opt.device) for col in self.opt.inputs_cols]
-                outputs, kl_loss = self.model(inputs)
                 targets = sample_batched['polarity'].to(self.opt.device)
+                outputs, kl_loss = self.model(inputs, targets)
                 loss = criterion(outputs, targets) + kl_loss
 
                 loss.backward()
@@ -213,7 +195,7 @@ class Instructor:
             for batch, sample_batched in enumerate(self.test_dataloader):
                 inputs = [sample_batched[col].to(self.opt.device) for col in self.opt.inputs_cols]
                 targets = sample_batched['polarity'].to(self.opt.device)
-                outputs, penal = self.model(inputs)
+                outputs, penal = self.model(inputs, targets)
                 n_test_correct += (torch.argmax(outputs, -1) == targets).sum().item()
                 n_test_total += len(outputs)
                 targets_all = torch.cat((targets_all, targets), dim=0) if targets_all is not None else targets
@@ -328,7 +310,7 @@ def main():
     parser.add_argument('--initializer', default='xavier_uniform_', type=str, help=', '.join(initializers.keys()))
     parser.add_argument('--learning_rate', default=0.002, type=float)
     parser.add_argument('--l2reg', default=0.01, type=float)
-    parser.add_argument('--num_epoch', default=15, type=int)
+    parser.add_argument('--num_epoch', default=50, type=int)
     parser.add_argument('--batch_size', default=16, type=int)
     parser.add_argument('--log_step', default=5, type=int)
     parser.add_argument('--embed_dim', default=300, type=int)
@@ -337,9 +319,9 @@ def main():
     parser.add_argument('--hidden_dim', type=int, default=768, help='GCN mem dim.')
     parser.add_argument('--polarities_dim', default=3, type=int, help='3')
 
-    parser.add_argument('--dropout', default=0.1, type=float)
+    parser.add_argument('--dropout', default=0.3, type=float)
     parser.add_argument('--input_dropout', type=float, default=0.7, help='Input dropout rate.')
-    parser.add_argument('--gcn_dropout', type=float, default=0.1, help='GCN layer dropout rate.')
+    parser.add_argument('--gcn_dropout', type=float, default=0.3, help='GCN layer dropout rate.')
     parser.add_argument('--lower', default=True, help='Lowercase all words.')
     parser.add_argument('--direct', default=False, help='directed graph or undirected graph')
     parser.add_argument('--loop', default=True)
@@ -351,7 +333,7 @@ def main():
     parser.add_argument('--rnn_dropout', type=float, default=0.1, help='RNN dropout rate.')
 
     parser.add_argument('--dim_heads', default=64, type=int, help='dim of every head in multi-attention heads')
-    parser.add_argument('--attention_heads', default=1, type=int, help='number of multi-attention heads')
+    parser.add_argument('--attention_heads', default=8, type=int, help='number of multi-attention heads')
     parser.add_argument('--max_length', default=100, type=int)
     parser.add_argument('--device', default='cuda', type=str, help='cpu, cuda')
     parser.add_argument('--seed', default=1000, type=int)

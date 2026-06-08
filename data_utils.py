@@ -551,12 +551,19 @@ class ABSAGCNData(Dataset):
             context_asp_adj_matrix = (np.ones((tokenizer.max_seq_len, tokenizer.max_seq_len)) * np.inf).astype('float32')
             context_asp_adj_matrix[1:context_len + 1, 1:context_len + 1] = adj_reshape
 
+            amr_adj = np.eye(len(text_list), dtype='float32')
+            for src, _, dst in obj.get('amr_edges', []):
+                if src < len(text_list) and dst < len(text_list):
+                    amr_adj[src][dst] = 1
+                    amr_adj[dst][src] = 1
+
             edge_adj = np.zeros((truncate_tok_len, truncate_tok_len), dtype='float32')
-            edg_adj_matrix = np.ones((tokenizer.max_seq_len, tokenizer.max_seq_len)).astype('int64')
-            edge_pad_adj = np.ones((context_asp_len, context_asp_len)).astype('int64')
-            if not opt.edge == "same":
-                edge_pad_adj[1:context_len + 1, 1:context_len + 1] = edge_adj
-            edg_adj_matrix[:context_asp_len, :context_asp_len] = edge_pad_adj
+            for i in range(truncate_tok_len):
+                for j in range(truncate_tok_len):
+                    edge_adj[i][j] = amr_adj[tok2ori_map[i]][tok2ori_map[j]]
+
+            edg_adj_matrix = np.eye(tokenizer.max_seq_len, dtype='float32')
+            edg_adj_matrix[1:context_len + 1, 1:context_len + 1] = edge_adj
 # -----------------------------------------------------------------------------------------------------------------------------------
             data = {
                 'text_bert_indices': context_asp_ids,

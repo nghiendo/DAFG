@@ -1,222 +1,214 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from layers import MultiHeadAttention, PHMultiHeadAttention, DynamicLSTM, Attention, RelationalGraphConvLayer, GraphConvolution
-from transformers import BertModel, RobertaModel
+from transformers import RobertaModel
+
+from layers import DynamicLSTM, GraphConvolution
 
 
-def mask_logits(target, mask):
-    return target * mask + (1 - mask) * (-1e30)
+ROBERTA_PATH = './roberta'
 
 
 class LayerNorm(nn.Module):
-
     def __init__(self, features, eps=1e-6):
-        super(LayerNorm, self).__init__()
-        self.a_2 = nn.Parameter(torch.ones(features))
-        self.b_2 = nn.Parameter(torch.zeros(features))
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(features))
+        self.bias = nn.Parameter(torch.zeros(features))
         self.eps = eps
 
     def forward(self, x):
         mean = x.mean(-1, keepdim=True)
         std = x.std(-1, keepdim=True)
-        return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
+        return self.weight * (x - mean) / (std + self.eps) + self.bias
+
+
+def masked_average(hidden_states, mask):
+    mask = mask.float().unsqueeze(-1)
+    denom = mask.sum(dim=1).clamp_min(1.0)
+    return (hidden_states * mask).sum(dim=1) / denom
+
+
+def normalize_adjacency(adj, mask):
+    mask_2d = mask.float().unsqueeze(1) * mask.float().unsqueeze(2)
+    adj = adj * mask_2d
+    eye = torch.eye(adj.size(-1), device=adj.device).unsqueeze(0)
+    adj = adj + eye * mask.float().unsqueeze(2)
+    degree = adj.sum(dim=-1, keepdim=True).clamp_min(1.0)
+    return adj / degree
+
+
+class RelationAwareSelfAttention(nn.Module):
+    def __init__(self, hidden_dim, num_heads, dropout):
+        super().__init__()
+        assert hidden_dim % num_heads == 0
+        self.num_heads = num_heads
+        self.head_dim = hidden_dim // num_heads
+        self.q_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.k_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.v_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.out_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, aspect_hidden, feature_hidden, relation_bias, src_mask):
+        batch_size, seq_len, hidden_dim = feature_hidden.size()
+        query = self.q_proj(aspect_hidden).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key = self.k_proj(feature_hidden).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        value = self.v_proj(feature_hidden).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+        scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        scores = scores + relation_bias.unsqueeze(1)
+
+        key_mask = src_mask.unsqueeze(1).unsqueeze(2).bool()
+        scores = scores.masked_fill(~key_mask, -1e9)
+
+        attn = F.softmax(scores, dim=-1)
+        attn = self.dropout(attn)
+        context = torch.matmul(attn, value)
+        context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_dim)
+        return self.out_proj(context)
+
+
+class DAGFEncoder(nn.Module):
+    def __init__(self, mlm_model, opt):
+        super().__init__()
+        self.opt = opt
+        self.mlm_model = mlm_model
+        self.roberta_model = RobertaModel.from_pretrained(ROBERTA_PATH)
+
+        self.mlm_hidden = nn.Linear(opt.roberta_dim, opt.bert_dim)
+        self.layer_norm = LayerNorm(opt.bert_dim)
+        self.dropout = nn.Dropout(opt.bert_dropout)
+
+        self.syn_gcn1 = GraphConvolution(opt.bert_dim, opt.bert_dim)
+        self.syn_gcn2 = GraphConvolution(opt.bert_dim, opt.bert_dim)
+        self.sem_gcn = GraphConvolution(opt.bert_dim, opt.bert_dim)
+
+        self.syn_conv = nn.Sequential(
+            nn.Conv2d(1, 10, kernel_size=(5, 5), padding=(2, 2)),
+            nn.ReLU(),
+        )
+        self.syn_conv_proj = nn.Linear(10, opt.bert_dim)
+        self.syn_lstm = DynamicLSTM(opt.bert_dim, opt.hidden_dim // 2, num_layers=1, batch_first=True, bidirectional=True)
+        self.syn_lstm_proj = nn.Linear(opt.hidden_dim, opt.bert_dim)
+        self.syn_attention = RelationAwareSelfAttention(opt.bert_dim, opt.attention_heads, opt.dropout)
+
+        self.kl_syn_proj = nn.Linear(opt.bert_dim, opt.bert_dim)
+        self.kl_sem_proj = nn.Linear(opt.bert_dim, opt.bert_dim)
+
+    def _build_syn_representation(self, mlm_hidden, aspect_hidden, syn_adj, relation_bias, src_mask):
+        syn_hidden = F.relu(self.syn_gcn1(mlm_hidden, syn_adj))
+        syn_hidden = self.dropout(F.relu(self.syn_gcn2(syn_hidden, syn_adj)))
+
+        cnn_features = self.syn_conv(syn_adj.unsqueeze(1))
+        cnn_features = cnn_features.permute(0, 2, 3, 1).mean(dim=2)
+        cnn_features = self.syn_conv_proj(cnn_features)
+
+        seq_lengths = src_mask.sum(dim=-1).cpu()
+        lstm_features, _ = self.syn_lstm(mlm_hidden, seq_lengths)
+        lstm_features = self.syn_lstm_proj(lstm_features)
+
+        attn_cnn = self.syn_attention(aspect_hidden, cnn_features, relation_bias, src_mask)
+        attn_lstm = self.syn_attention(aspect_hidden, lstm_features, relation_bias, src_mask)
+        syn_context = torch.cat((attn_cnn, attn_lstm), dim=-1)
+        syn_context = syn_context.view(syn_context.size(0), syn_context.size(1), 2, self.opt.bert_dim).mean(dim=2)
+        return masked_average(syn_context, src_mask)
+
+    def _build_sem_representation(self, roberta_hidden, sem_adj, aspect_mask):
+        sem_hidden = F.relu(self.sem_gcn(roberta_hidden, sem_adj))
+        sem_hidden = self.dropout(sem_hidden)
+        return masked_average(sem_hidden, aspect_mask)
+
+    def forward(self, inputs):
+        text_bert_indices, text_prompt_indices, aspect_bert_indices, adj_matrix, edge_adj, distance_adj, relation_adj, src_mask, aspect_mask = inputs
+
+        mlm_logits = self.mlm_model(text_bert_indices).logits
+        mlm_hidden = self.dropout(self.mlm_hidden(mlm_logits))
+
+        roberta_hidden = self.roberta_model(text_bert_indices).last_hidden_state
+        roberta_hidden = self.dropout(self.layer_norm(roberta_hidden))
+        aspect_hidden = self.roberta_model(aspect_bert_indices).last_hidden_state
+
+        syn_bias = distance_adj + relation_adj.sum(dim=1)
+        syn_bias = syn_bias.masked_fill(torch.isinf(adj_matrix), 0.0)
+        syn_adj = normalize_adjacency(syn_bias, src_mask)
+        relation_bias = syn_adj + relation_adj[:, 4]
+
+        sem_adj = normalize_adjacency(edge_adj.float(), src_mask)
+
+        syn_repr = self._build_syn_representation(mlm_hidden, aspect_hidden, syn_adj, relation_bias, src_mask)
+        sem_repr = self._build_sem_representation(roberta_hidden, sem_adj, aspect_mask)
+
+        p_syn = F.softmax(self.kl_syn_proj(syn_repr), dim=-1)
+        p_sem = F.softmax(self.kl_sem_proj(sem_repr), dim=-1)
+        kl_loss = F.kl_div(p_syn.log(), p_sem, reduction='batchmean') * self.opt.gama
+
+        return syn_repr, sem_repr, kl_loss
 
 
 class GCNBertClassifier(nn.Module):
     def __init__(self, bert, opt):
         super().__init__()
         self.opt = opt
-        self.gcn_model = GCNAbsaModel(bert, opt=opt)
-        self.classifier = nn.Linear(opt.bert_dim * 3, opt.polarities_dim)
+        self.encoder = DAGFEncoder(bert, opt)
 
-    def forward(self, inputs, y_onehot={}):
-        outputs1, outputs2, outputs3, kl_loss,  pooled_output = self.gcn_model(inputs)
-        final_outputs = torch.cat((outputs2, outputs3, pooled_output, outputs1), dim=-1)   # 16,2304
-        logits = self.classifier(final_outputs)
-        return logits, kl_loss
-
-
-class GCNAbsaModel(nn.Module):
-    def __init__(self, bert, opt):
-        super().__init__()
-        self.opt = opt
-        self.gcn = GCNBert(bert, opt)
-
-    def forward(self, inputs):
-        text_bert_indices, text_prompt_indices, aspect_bert_indices, adj_matrix, edge_adj, distance_adj, relation_adj, src_mask, aspect_mask = inputs
-        h1, h2, h3, kl_loss, pooled_output = self.gcn(inputs)    # h1:16,100,768,  h2,h3:16,100,384
-        asp_wn = aspect_mask.sum(dim=1).unsqueeze(-1)
-        aspect_mask = aspect_mask.unsqueeze(-1).repeat(1, 1, self.opt.bert_dim // 2)   # 16,100,384
-        outputs1 = h1   # 16,768
-        outputs2 = (h2 * aspect_mask).sum(dim=1) / asp_wn   # 16,384
-        outputs3 = (h3 * aspect_mask).sum(dim=1) / asp_wn   # 16,384
-
-        return outputs1, outputs2, outputs3, kl_loss, pooled_output
-
-
-path = './roberta/'
-
-
-class GCNBert(nn.Module):
-    def __init__(self, bert, opt):
-        super(GCNBert, self).__init__()
-        self.bert = bert
-        self.bert_model = RobertaModel.from_pretrained(path)
-        self.opt = opt
-        self.layers = opt.num_layers
-        self.mem_dim = opt.bert_dim // 2
-        self.attention_heads = opt.attention_heads
-        self.bert_dim = opt.bert_dim
-        self.bert_drop = nn.Dropout(opt.bert_dropout)
-        self.pooled_drop = nn.Dropout(opt.bert_dropout)
-        self.gcn_drop = nn.Dropout(opt.gcn_dropout)
-        self.layernorm = LayerNorm(opt.bert_dim)
-
-        self.attdim = 100
-        torch.serialization.add_safe_globals([torch.nn.modules.sparse.Embedding])
-        self.edge_emb = torch.load(opt.amr_edge_pt) \
-            if opt.edge == "normal" or opt.edge == "same" else nn.Embedding(56000, 1024)
-        self.edge_emb_layernorm = nn.LayerNorm(opt.amr_edge_dim)
-        self.edge_emb_drop = nn.Dropout(opt.edge_dropout)
-        self.edge_dim_change = nn.Linear(opt.amr_edge_dim, opt.hidden_dim, bias=False)
-        self.edge_proj = nn.Linear(opt.amr_edge_dim, opt.hidden_dim)
-        self.edge_score = nn.Linear(opt.amr_edge_dim, 1)
-
-        self.W = nn.ModuleList()
-        for layer in range(self.layers):
-            input_dim = self.bert_dim if layer == 0 else self.mem_dim
-            self.W.append(nn.Linear(input_dim, self.mem_dim))
-
-        self.wa = nn.ModuleList()
-        for layer in range(self.layers):
-            input_dim = self.bert_dim if layer == 0 else self.mem_dim
-            self.wa.append(nn.Linear(input_dim, self.mem_dim))
-
-        self.ws = nn.ModuleList()
-        for j in range(self.layers):
-            input_dim = self.bert_dim if j == 0 else self.mem_dim
-            self.ws.append(nn.Linear(input_dim, self.mem_dim))
-
-        self.linear = nn.Linear(opt.roberta_dim, opt.hidden_dim)
-        self.edge_linear = nn.Linear(opt.hidden_dim, self.attdim)
-        self.aspect_linear = nn.Linear(opt.bert_dim, self.attdim)
-        self.lstm_linear = nn.Linear(2 * opt.hidden_dim, self.attdim)
-
-        self.dense = nn.Linear(2 * self.attdim, opt.hidden_dim)
-        self.aggregate_W = nn.Linear(2 * opt.hidden_dim, self.attdim)
-        self.gc1 = GraphConvolution(opt.hidden_dim, opt.hidden_dim)
-        self.gc2 = GraphConvolution(opt.hidden_dim, opt.hidden_dim)
-        self.rgc1 = RelationalGraphConvLayer(5, opt.bert_dim, opt.bert_dim)
-        self.rgc2 = RelationalGraphConvLayer(5, opt.bert_dim, opt.bert_dim)
-
-        self.attn = MultiHeadAttention(self.opt, opt.attention_heads, self.bert_dim)
-        self.att = PHMultiHeadAttention(opt.attention_heads, opt.hidden_dim)
-        self.affine1 = nn.Parameter(torch.Tensor(opt.hidden_dim, opt.hidden_dim))
-        self.affine2 = nn.Parameter(torch.Tensor(opt.hidden_dim, opt.hidden_dim))
-        self.affine3 = nn.Parameter(torch.Tensor(self.mem_dim, self.mem_dim))
-        self.affine4 = nn.Parameter(torch.Tensor(self.mem_dim, self.mem_dim))
-        self.cnn_gat = nn.Sequential(
-            nn.Conv2d(1, 10, (5, 768), (5,)),
+        self.syn_aux = nn.Linear(opt.bert_dim, opt.polarities_dim)
+        self.sem_aux = nn.Linear(opt.bert_dim, opt.polarities_dim)
+        self.syn_proj = nn.Linear(opt.bert_dim, opt.bert_dim)
+        self.sem_proj = nn.Linear(opt.bert_dim, opt.bert_dim)
+        self.gate = nn.Sequential(
+            nn.Linear(opt.bert_dim * 2 + 2, opt.bert_dim),
             nn.ReLU(),
-            nn.MaxPool2d((2, 1))
+            nn.Linear(opt.bert_dim, opt.bert_dim),
+            nn.Sigmoid(),
         )
-        self.attention = Attention(self.attdim, out_dim=self.attdim, score_function='scaled_dot_product', n_head=8, dropout=opt.dropout)
-        self.text_lstm = DynamicLSTM(opt.hidden_dim, opt.hidden_dim, num_layers=2, batch_first=True, bidirectional=True)
+        self.classifier = nn.Linear(opt.bert_dim, opt.polarities_dim)
+        self.final_dropout = nn.Dropout(opt.final_dropout)
 
+    @staticmethod
+    def _batch_minmax(error_values):
+        min_val = error_values.min(dim=0, keepdim=True).values
+        max_val = error_values.max(dim=0, keepdim=True).values
+        return (error_values - min_val) / (max_val - min_val + 1e-8)
 
-    def forward(self, inputs):
-        text_bert_indices, text_prompt_indices, aspect_bert_indices, adj_matrix, edge_adj, distance_adj, relation_adj, src_mask, aspect_mask = inputs
-        # 16,100                 16,100               16,100        16,100,100  16,100,100  16,100,100   16,5,100,100    16,100     16,100
-        adj = torch.bmm(distance_adj, relation_adj.sum(dim=1))
-        asp = self.bert_model(aspect_bert_indices).last_hidden_state  # 16,100,768
-        aspect = self.aspect_linear(asp)  # 16,100,100
-        src_mask = src_mask.unsqueeze(-2)  # 16,1,100
-        batch, len, _ = edge_adj.size()  # 16 100
-        text_len = torch.sum(text_bert_indices != 0, dim=-1).cpu()  # 16
+    def _agf_forward(self, syn_repr, sem_repr, labels):
+        y_onehot = F.one_hot(labels, num_classes=self.opt.polarities_dim).float()
 
-        logit = self.bert(text_prompt_indices).logits    # 16,100,50265
-        linear_out = self.linear(logit)  # 16,100,768
+        syn_pred = F.softmax(self.syn_aux(syn_repr), dim=-1)
+        sem_pred = F.softmax(self.sem_aux(sem_repr), dim=-1)
+        esyn = torch.norm(y_onehot - syn_pred, p=2, dim=1, keepdim=True)
+        esem = torch.norm(y_onehot - sem_pred, p=2, dim=1, keepdim=True)
+        esyn_norm = self._batch_minmax(esyn)
+        esem_norm = self._batch_minmax(esem)
 
-        sequence_output = self.bert_model(text_bert_indices).last_hidden_state  # 16,100,768 16,768
-        sequence_output = self.layernorm(sequence_output)  # 16,100,768
+        gate_input = torch.cat((esyn_norm, esem_norm, syn_repr, sem_repr), dim=-1)
+        gate = self.gate(gate_input)
 
-        pooled_output = self.bert_model(text_bert_indices).pooler_output
-        pooled_output = self.pooled_drop(pooled_output)  # 16,768
-# ------------------------------------------------句法GCN----------------------------------------------------------------------------------------------
-        gc1_out = F.relu(self.gc1(linear_out, adj))   # 16,100,768
-        gc2_out = F.relu(self.gc2(gc1_out, adj))  # 16,100,768
-        cnn_in = gc2_out.unsqueeze(1)   # 16,1,100,768
-        cnn_out = self.cnn_gat(cnn_in)   # 16,10,10,1
-        cnn_out = cnn_out.view(batch, -1)   # 16,100
-        lstm_out, (_, _) = self.text_lstm(linear_out, text_len)
-        lstm_out = self.lstm_linear(lstm_out)   # 16,83,100
-        attention_output_c, _ = self.attention(cnn_out, aspect)   # 16,100,100
-        attention_output_l, _ = self.attention(lstm_out, aspect)  # 16,100,100
-        attention_cat = torch.cat((attention_output_c, attention_output_l), dim=-1)    # 16,100,200
-        attention_mean = torch.div(torch.sum(attention_cat, dim=1), text_len.unsqueeze(1).float().to(attention_cat.device))  # 16,200
-        outputs_ad = self.dense(attention_mean)  # 16,768
+        if torch.is_grad_enabled():
+            grad_sem = torch.autograd.grad(esem_norm.sum(), sem_repr, retain_graph=True, create_graph=True)[0]
+            h_au = grad_sem * grad_sem
+        else:
+            h_au = torch.zeros_like(sem_repr)
 
-# -------------------------------------------------语义GCN--------------------------------------------------------------------------------------------
-        edge_adj = self.edge_emb(edge_adj)  # 16,100,100,1024
-        for layer in range(self.layers):
-            edge_gcn1 = self.edge_proj(edge_adj).sum(dim=2)  # 16,100,768
-            edge_gcn2 = self.edge_score(edge_adj).squeeze(-1)  # 16,100,100
-            edge_adj = self.gc1(edge_gcn1, edge_gcn2)  # 16,100,768
-        sem_input = edge_adj
-        gcn_inputs = self.bert_drop(sequence_output)
-        aspect_mask_resize = aspect_mask.unsqueeze(-1).repeat(1, 1, self.bert_dim)  # 16,100,768
-        sem_mask = torch.ones_like(sem_input, dtype=torch.bool)
-        sem_mask_con = torch.where(sem_mask, torch.ones_like(sem_input), torch.zeros_like(sem_input))
-        aspect_outs = gcn_inputs * aspect_mask_resize * sem_mask_con
-        aspect_scores, s_attn = self.attn(gcn_inputs, gcn_inputs, src_mask, aspect_outs, aspect_mask_resize)
-        aspect_score_list = [attn_adj.squeeze(1) for attn_adj in torch.split(aspect_scores, 1, dim=1)]
-        attn_adj_list = [attn_adj.squeeze(1) for attn_adj in torch.split(s_attn, 1, dim=1)]
-        adj_ag = None
-        aspect_score_avg = None
-        adj_s = None
-        for i in range(self.attention_heads):
-            if aspect_score_avg is None:
-                aspect_score_avg = aspect_score_list[i]
-            else:
-                aspect_score_avg += aspect_score_list[i]
-        aspect_score_avg = aspect_score_avg / self.attention_heads
-        for i in range(self.attention_heads):
-            if adj_s is None:
-                adj_s = attn_adj_list[i]
-            else:
-                adj_s += attn_adj_list[i]
-        adj_s = adj_s / self.attention_heads
-        for j in range(adj_s.size(0)):
-            adj_s[j] -= torch.diag(torch.diag(adj_s[j]))
-            adj_s[j] += torch.eye(adj_s[j].size(0), device=adj_s.device)  # self-loop
+        syn_prime = F.softmax(self.syn_proj(syn_repr), dim=-1)
+        sem_prime = F.softmax(self.sem_proj(sem_repr), dim=-1)
+        fused_hidden = self.opt.alpha * syn_prime + self.opt.beta * sem_prime + gate * h_au
+        return self.classifier(self.final_dropout(fused_hidden))
 
-        ad_mask = torch.ones_like(outputs_ad[:, :1]).unsqueeze(-1)
-        ad_mask = ad_mask.expand(-1, self.attdim, self.attdim)
-        adj_s = src_mask.transpose(1, 2) * adj_s * ad_mask
-        syn_m = torch.exp((-1.0) * self.opt.alpha * (adj_matrix + adj.mul(adj_matrix.new_zeros(1)).sum()))
-        sem_m = (aspect_score_avg > torch.ones_like(aspect_score_avg) * self.opt.beta)
-        syn_m = syn_m.masked_fill(sem_m, 1)
-        adj_ag = (syn_m * aspect_score_avg).type(torch.float32)
-        kl_loss = F.kl_div(adj_ag.softmax(-1).log(), adj_s.softmax(-1), reduction='sum')
-        kl_loss = kl_loss * self.opt.gama
-        denom_s = adj_s.sum(2).unsqueeze(2) + 1
-        denom_ag = adj_ag.sum(2).unsqueeze(2) + 1
-        outputs_s = gcn_inputs
-        outputs_ag = gcn_inputs
-        for l in range(self.layers):
-            Ax_ag = adj_ag.bmm(outputs_ag)
-            AxW_ag = self.wa[l](Ax_ag)
-            AxW_ag = AxW_ag / denom_ag
-            gAxW_ag = F.relu(AxW_ag)
-            Ax_s = adj_s.bmm(outputs_s)
-            AxW_s = self.ws[l](Ax_s)
-            AxW_s = AxW_s / denom_s
-            gAxW_s = F.relu(AxW_s)
-            A3 = F.softmax(torch.bmm(torch.matmul(gAxW_ag, self.affine3), torch.transpose(gAxW_s, 1, 2)), dim=-1)
-            A4 = F.softmax(torch.bmm(torch.matmul(gAxW_s, self.affine4), torch.transpose(gAxW_ag, 1, 2)), dim=-1)
-            gAxW_ag, gAxW_s = torch.bmm(A3, gAxW_s), torch.bmm(A4, gAxW_ag)
-            outputs_ag = self.gcn_drop(gAxW_ag) if l < self.layers - 1 else gAxW_ag   # 16,100,384
-            outputs_s = self.gcn_drop(gAxW_s) if l < self.layers - 1 else gAxW_s     # 16,100,384
-# ---------------------------------------------------------------------------------------------------------------------------------------------------
-        return outputs_ad, outputs_ag, outputs_s, kl_loss, pooled_output
+    def forward(self, inputs, labels=None):
+        syn_repr, sem_repr, kl_loss = self.encoder(inputs)
+        if labels is None:
+            fused_hidden = self.opt.alpha * syn_repr + self.opt.beta * sem_repr
+            logits = self.classifier(self.final_dropout(fused_hidden))
+            return logits, kl_loss
+
+        if torch.is_grad_enabled():
+            logits = self._agf_forward(syn_repr, sem_repr, labels)
+            return logits, kl_loss
+
+        with torch.enable_grad():
+            syn_repr = syn_repr.detach().requires_grad_(True)
+            sem_repr = sem_repr.detach().requires_grad_(True)
+            logits = self._agf_forward(syn_repr, sem_repr, labels)
+        return logits.detach(), kl_loss.detach()
