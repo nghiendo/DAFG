@@ -195,7 +195,7 @@ class Instructor:
             for batch, sample_batched in enumerate(self.test_dataloader):
                 inputs = [sample_batched[col].to(self.opt.device) for col in self.opt.inputs_cols]
                 targets = sample_batched['polarity'].to(self.opt.device)
-                outputs, penal = self.model(inputs, targets)
+                outputs, penal = self.model(inputs)
                 n_test_correct += (torch.argmax(outputs, -1) == targets).sum().item()
                 n_test_total += len(outputs)
                 targets_all = torch.cat((targets_all, targets), dim=0) if targets_all is not None else targets

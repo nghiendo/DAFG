@@ -129,14 +129,14 @@ class DAGFEncoder(nn.Module):
     def forward(self, inputs):
         text_bert_indices, text_prompt_indices, aspect_bert_indices, adj_matrix, edge_adj, distance_adj, relation_adj, src_mask, aspect_mask = inputs
 
-        mlm_logits = self.mlm_model(text_bert_indices).logits
+        mlm_logits = self.mlm_model(text_prompt_indices).logits
         mlm_hidden = self.dropout(self.mlm_hidden(mlm_logits))
 
         roberta_hidden = self.roberta_model(text_bert_indices).last_hidden_state
         roberta_hidden = self.dropout(self.layer_norm(roberta_hidden))
         aspect_hidden = self.roberta_model(aspect_bert_indices).last_hidden_state
-        aspect_mask = (aspect_bert_indices != 0).long()
-        aspect_repr = masked_average(aspect_hidden, aspect_mask)
+        aspect_token_mask = (aspect_bert_indices != 0).long()
+        aspect_repr = masked_average(aspect_hidden, aspect_token_mask)
 
         syn_bias = distance_adj + relation_adj.sum(dim=1)
         syn_bias = syn_bias.masked_fill(torch.isinf(adj_matrix), 0.0)
@@ -204,19 +204,23 @@ class GCNBertClassifier(nn.Module):
         fused_hidden = self.opt.alpha * syn_prime + self.opt.beta * sem_prime + gate * h_au
         return self.classifier(self.final_dropout(fused_hidden))
 
+    def _inference_forward(self, syn_repr, sem_repr):
+        # Inference cannot depend on gold labels, so use the paper's dual-channel
+        # weighted fusion without the error-driven auxiliary term.
+        syn_prime = F.softmax(self.syn_proj(syn_repr), dim=-1)
+        sem_prime = F.softmax(self.sem_proj(sem_repr), dim=-1)
+        fused_hidden = self.opt.alpha * syn_prime + self.opt.beta * sem_prime
+        return self.classifier(self.final_dropout(fused_hidden))
+
     def forward(self, inputs, labels=None):
         syn_repr, sem_repr, kl_loss = self.encoder(inputs)
         if labels is None:
-            fused_hidden = self.opt.alpha * syn_repr + self.opt.beta * sem_repr
-            logits = self.classifier(self.final_dropout(fused_hidden))
+            logits = self._inference_forward(syn_repr, sem_repr)
             return logits, kl_loss
 
         if torch.is_grad_enabled():
             logits = self._agf_forward(syn_repr, sem_repr, labels)
             return logits, kl_loss
 
-        with torch.enable_grad():
-            syn_repr = syn_repr.detach().requires_grad_(True)
-            sem_repr = sem_repr.detach().requires_grad_(True)
-            logits = self._agf_forward(syn_repr, sem_repr, labels)
-        return logits.detach(), kl_loss.detach()
+        logits = self._inference_forward(syn_repr, sem_repr)
+        return logits, kl_loss
