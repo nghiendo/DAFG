@@ -97,7 +97,7 @@ class DAGFEncoder(nn.Module):
         self.kl_syn_proj = nn.Linear(opt.bert_dim, opt.bert_dim)
         self.kl_sem_proj = nn.Linear(opt.bert_dim, opt.bert_dim)
 
-    def _build_syn_representation(self, mlm_hidden, aspect_hidden, syn_adj, relation_bias, src_mask):
+    def _build_syn_representation(self, mlm_hidden, aspect_repr, syn_adj, relation_bias, src_mask):
         syn_hidden = F.relu(self.syn_gcn1(mlm_hidden, syn_adj))
         syn_hidden = self.dropout(F.relu(self.syn_gcn2(syn_hidden, syn_adj)))
 
@@ -107,10 +107,16 @@ class DAGFEncoder(nn.Module):
 
         seq_lengths = src_mask.sum(dim=-1).cpu()
         lstm_features, _ = self.syn_lstm(mlm_hidden, seq_lengths)
+        if lstm_features.size(1) < mlm_hidden.size(1):
+            pad_len = mlm_hidden.size(1) - lstm_features.size(1)
+            lstm_features = F.pad(lstm_features, (0, 0, 0, pad_len))
         lstm_features = self.syn_lstm_proj(lstm_features)
 
-        attn_cnn = self.syn_attention(aspect_hidden, cnn_features, relation_bias, src_mask)
-        attn_lstm = self.syn_attention(aspect_hidden, lstm_features, relation_bias, src_mask)
+        aspect_for_cnn = aspect_repr.unsqueeze(1).expand(-1, cnn_features.size(1), -1)
+        aspect_for_lstm = aspect_repr.unsqueeze(1).expand(-1, lstm_features.size(1), -1)
+
+        attn_cnn = self.syn_attention(aspect_for_cnn, cnn_features, relation_bias, src_mask)
+        attn_lstm = self.syn_attention(aspect_for_lstm, lstm_features, relation_bias, src_mask)
         syn_context = torch.cat((attn_cnn, attn_lstm), dim=-1)
         syn_context = syn_context.view(syn_context.size(0), syn_context.size(1), 2, self.opt.bert_dim).mean(dim=2)
         return masked_average(syn_context, src_mask)
@@ -129,6 +135,8 @@ class DAGFEncoder(nn.Module):
         roberta_hidden = self.roberta_model(text_bert_indices).last_hidden_state
         roberta_hidden = self.dropout(self.layer_norm(roberta_hidden))
         aspect_hidden = self.roberta_model(aspect_bert_indices).last_hidden_state
+        aspect_mask = (aspect_bert_indices != 0).long()
+        aspect_repr = masked_average(aspect_hidden, aspect_mask)
 
         syn_bias = distance_adj + relation_adj.sum(dim=1)
         syn_bias = syn_bias.masked_fill(torch.isinf(adj_matrix), 0.0)
@@ -137,7 +145,7 @@ class DAGFEncoder(nn.Module):
 
         sem_adj = normalize_adjacency(edge_adj.float(), src_mask)
 
-        syn_repr = self._build_syn_representation(mlm_hidden, aspect_hidden, syn_adj, relation_bias, src_mask)
+        syn_repr = self._build_syn_representation(mlm_hidden, aspect_repr, syn_adj, relation_bias, src_mask)
         sem_repr = self._build_sem_representation(roberta_hidden, sem_adj, aspect_mask)
 
         p_syn = F.softmax(self.kl_syn_proj(syn_repr), dim=-1)
